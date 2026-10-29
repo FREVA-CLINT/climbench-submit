@@ -29,6 +29,8 @@ Accepted prediction inputs are `.nc`/`.netcdf`, a ZIP containing one Zarr v2/v3 
 
 The platform validates declared task requirements before reporting success. It stamps its private prediction copy with the submission UUID and selected task identity. Admins evaluate the stored predictions and attach results; staff must separately accept those results before leaderboard publication. Exact target-coordinate comparisons and scientific data-value checks happen during admin evaluation.
 
+Model output may be deterministic or a probabilistic ensemble with one extra dimension named `ensemble` on every required variable, e.g. `(time, ensemble, lat, lon)`, for any task. The CLI does not inspect the data: the platform detects the prediction type and sets the submission's `deterministic_run` accordingly, so there is no prompt for it.
+
 The CLI prints validation errors or a receipt containing the upload UUID and detail URL. Update and deletion requests are available through the web interface.
 
 ## Export optional training metadata

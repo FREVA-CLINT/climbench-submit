@@ -82,9 +82,6 @@ def _submission_metadata(user: dict[str, object]) -> dict[str, str]:
                 default="No test-period target data or forbidden data were used.",
             ).strip(),
             "run_command": _optional_prompt("Run command"),
-            "deterministic_run": "on"
-            if typer.confirm("Is the run deterministic? [OPTIONAL]", default=True)
-            else "",
             "notes": _optional_prompt("Notes"),
         }
     )

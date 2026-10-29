@@ -6,7 +6,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from climbench_submit import cli
+from climbench_submit import cli, client
 
 runner = CliRunner()
 
@@ -134,3 +134,26 @@ def test_multiple_tracker_runs_require_one_directory(tmp_path):
     )
     assert result.exit_code == 1
     assert "Multiple W&B runs" in result.output
+
+
+def test_submission_metadata_leaves_prediction_type_to_platform(monkeypatch):
+    prompts = []
+
+    def prompt(text, default="", **kwargs):
+        del kwargs
+        prompts.append(text)
+        return {"Method name": "Ensemble model"}.get(text, default)
+
+    def confirm(text, default=False):
+        prompts.append(text)
+        return default
+
+    monkeypatch.setattr(client.typer, "prompt", prompt)
+    monkeypatch.setattr(client.typer, "confirm", confirm)
+
+    metadata = client._submission_metadata({"first_name": "Ada", "email": "ada@example.org"})
+
+    assert metadata["method_name"] == "Ensemble model"
+    assert metadata["authors"] == "Ada"
+    assert "deterministic_run" not in metadata
+    assert not any("deterministic" in text.lower() and "run" in text.lower() for text in prompts)
