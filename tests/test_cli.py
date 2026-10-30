@@ -186,7 +186,7 @@ def test_upload_progress_counts_every_uploaded_byte(tmp_path, monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def update(self, count, item):
+        def update(self, count):  # the signature of older click versions
             updates.append(count)
 
     monkeypatch.setattr(cli.typer, "progressbar", lambda **kwargs: Bar())

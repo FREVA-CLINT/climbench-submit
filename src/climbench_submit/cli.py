@@ -95,7 +95,8 @@ def upload_progress(total: int):
         def advance(count: int) -> None:
             nonlocal sent
             sent += count
-            bar.update(count, sent)
+            # Older click only takes n_steps; status() reads ``sent`` itself.
+            bar.update(count)
 
         yield advance
 
