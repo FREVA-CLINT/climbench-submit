@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import os
+import sys
 import tempfile
 import zipfile
 
@@ -44,6 +45,57 @@ def prediction_upload(path: Path):
                 "Choose an existing NetCDF file, Zarr ZIP, or .zarr directory."
             )
         yield path
+
+
+def _size(count: int) -> str:
+    if count < 1024:
+        return f"{count} B"
+    value = count / 1024
+    for unit in ("KB", "MB"):
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+class _ProgressReader:
+    """Pass an upload file to httpx and report every chunk it reads."""
+
+    def __init__(self, file, advance):
+        self._file = file
+        self._advance = advance
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._file.read(size)
+        self._advance(len(chunk))
+        return chunk
+
+    def __getattr__(self, name):
+        # httpx sizes the request through fileno() and rewinds with seek().
+        return getattr(self._file, name)
+
+
+@contextmanager
+def upload_progress(total: int):
+    """Yield a callback that advances a byte progress bar for the request body."""
+
+    sent = 0
+
+    def status(_item) -> str:
+        text = f"{_size(sent)}/{_size(total)}"
+        # The platform validates synchronously, so the response lags the last byte.
+        return f"{text}, waiting for platform validation" if sent >= total else text
+
+    with typer.progressbar(
+        length=max(total, 1), label="Uploading", item_show_func=status, file=sys.stderr
+    ) as bar:
+
+        def advance(count: int) -> None:
+            nonlocal sent
+            sent += count
+            bar.update(count, sent)
+
+        yield advance
 
 
 @submit_app.command()
@@ -98,13 +150,8 @@ def submit(platform_url: str | None = typer.Option(None, "--platform-url")):
                 typer.echo("Submission cancelled.")
                 return
             with ExitStack() as stack:
-                prediction = stack.enter_context(prediction_upload(prediction))
-                files = {
-                    "prediction_file": (
-                        prediction.name,
-                        stack.enter_context(prediction.open("rb")),
-                        "application/octet-stream",
-                    )
+                uploads = {
+                    "prediction_file": stack.enter_context(prediction_upload(prediction))
                 }
                 for field, path in (
                     ("compressed_file", compressed),
@@ -116,11 +163,18 @@ def submit(platform_url: str | None = typer.Option(None, "--platform-url")):
                     if path is not None:
                         if not path.is_file():
                             raise ValueError(f"File does not exist: {path}")
-                        files[field] = (
-                            path.name,
-                            stack.enter_context(path.open("rb")),
-                            "application/octet-stream",
-                        )
+                        uploads[field] = path
+                advance = stack.enter_context(
+                    upload_progress(sum(path.stat().st_size for path in uploads.values()))
+                )
+                files = {
+                    field: (
+                        path.name,
+                        _ProgressReader(stack.enter_context(path.open("rb")), advance),
+                        "application/octet-stream",
+                    )
+                    for field, path in uploads.items()
+                }
                 response = client.post(
                     f"{base}/api/v1/submissions/",
                     headers=headers,

@@ -31,7 +31,7 @@ The platform validates declared task requirements before reporting success. It s
 
 Model output may be deterministic or a probabilistic ensemble with one extra dimension named `ensemble` on every required variable, e.g. `(time, ensemble, lat, lon)`, for any task. The CLI does not inspect the data: the platform detects the prediction type and sets the submission's `deterministic_run` accordingly, so there is no prompt for it.
 
-The CLI prints validation errors or a receipt containing the upload UUID and detail URL. Update and deletion requests are available through the web interface.
+While the files are sent, a progress bar on stderr shows the bytes uploaded across all files; once the last byte is sent it reports that it is waiting for the platform, which validates before responding. The CLI then prints validation errors or a receipt containing the upload UUID and detail URL. Update and deletion requests are available through the web interface.
 
 ## Export optional training metadata
 

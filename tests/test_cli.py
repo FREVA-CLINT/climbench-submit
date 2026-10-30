@@ -39,6 +39,8 @@ def test_submission_auth_task_selection_and_upload(tmp_path, monkeypatch):
                 ],
             )
         body = request.read()
+        # Progress wrapping must keep a sized (not chunked) request body.
+        assert int(request.headers["Content-Length"]) == len(body)
         assert b'name="selected_task"' in body and b"task-uuid" in body
         assert b'name="prediction_file"' in body and b"model output" in body
         assert b"evaluation_result_netcdf_file" not in body
@@ -70,7 +72,46 @@ def test_submission_auth_task_selection_and_upload(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "upload-uuid" in result.output and "Exact levels deferred" in result.output
     assert "private-token" not in result.output
+    assert "Uploading" in result.output
     assert len(calls) == 3
+
+
+def test_upload_progress_counts_every_uploaded_byte(tmp_path, monkeypatch):
+    first, second = tmp_path / "predictions.nc", tmp_path / "training.yaml"
+    first.write_bytes(b"x" * 200_000)
+    second.write_bytes(b"gpu_count: 2\n")
+    updates = []
+
+    class Bar:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, count, item):
+            updates.append(count)
+
+    monkeypatch.setattr(cli.typer, "progressbar", lambda **kwargs: Bar())
+    total = first.stat().st_size + second.stat().st_size
+    with cli.upload_progress(total) as advance, first.open("rb") as a, second.open("rb") as b:
+        request = httpx.Request(
+            "POST",
+            "https://example.org/",
+            files={
+                "prediction_file": (first.name, cli._ProgressReader(a, advance)),
+                "runtime_metadata_file": (second.name, cli._ProgressReader(b, advance)),
+            },
+        )
+        request.read()
+    assert sum(updates) == total
+    assert len(updates) > 2  # streamed in chunks, not one read per file
+
+
+def test_upload_sizes_are_human_readable():
+    assert cli._size(512) == "512 B"
+    assert cli._size(1536) == "1.5 KB"
+    assert cli._size(5 * 1024**3) == "5.0 GB"
 
 
 def test_zarr_directory_packaging_preserves_source(tmp_path):
