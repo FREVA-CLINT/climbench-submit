@@ -25,7 +25,7 @@ climbench-submit --platform-url http://localhost:8000
 
 The command logs in, lists active task versions, asks for model output and the same metadata as the web form, and confirms the upload. Credentials and short-lived bearer tokens stay in memory. The URL option takes precedence over the environment variable; the development default is `http://localhost:8000`.
 
-Accepted prediction inputs are `.nc`/`.netcdf`, a ZIP containing one Zarr v2/v3 dataset, or a local `.zarr` directory. Directories are temporarily packaged with the standard library, leaving source files unchanged. Compression tasks additionally require the compressed artifact file.
+Accepted prediction inputs are `.nc`/`.netcdf`, a ZIP containing one Zarr v2/v3 dataset, or a local `.zarr` directory. Directories are temporarily packaged with the standard library, leaving source files unchanged. When the platform stores artifacts in S3, the CLI uploads model output in parts straight to the bucket with presigned URLs (like the web form), so large files are not limited by the platform's proxy; otherwise it falls back to a multipart upload to the platform. Compression tasks additionally require the compressed artifact file.
 
 The platform validates declared task requirements before reporting success. It stamps its private prediction copy with the submission UUID and selected task identity. Admins evaluate the stored predictions and attach results; staff must separately accept those results before leaderboard publication. Exact target-coordinate comparisons and scientific data-value checks happen during admin evaluation.
 

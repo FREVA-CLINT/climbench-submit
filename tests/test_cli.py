@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import json
 import zipfile
 
@@ -38,6 +39,8 @@ def test_submission_auth_task_selection_and_upload(tmp_path, monkeypatch):
                     }
                 ],
             )
+        if request.url.path.endswith("/uploads/start/"):
+            return httpx.Response(409, json={"code": "direct_upload_unavailable"})
         body = request.read()
         # Progress wrapping must keep a sized (not chunked) request body.
         assert int(request.headers["Content-Length"]) == len(body)
@@ -73,7 +76,101 @@ def test_submission_auth_task_selection_and_upload(tmp_path, monkeypatch):
     assert "upload-uuid" in result.output and "Exact levels deferred" in result.output
     assert "private-token" not in result.output
     assert "Uploading" in result.output
-    assert len(calls) == 3
+    assert len(calls) == 4
+
+
+def test_submission_uploads_directly_to_storage(tmp_path, monkeypatch):
+    prediction = tmp_path / "predictions.nc"
+    prediction.write_bytes(b"0123456789")
+    stored = {}
+    attempts = []
+
+    def handle(request):
+        path = request.url.path
+        if request.url.host == "s3.test":
+            assert "Authorization" not in request.headers
+            attempts.append(path)
+            if path == "/part2" and attempts.count(path) == 1:
+                return httpx.Response(500)
+            stored[path] = request.read()
+            return httpx.Response(200, headers={"ETag": f'"{path}"'})
+        if path.endswith("/auth/login/"):
+            return httpx.Response(200, json={"access": "private-token", "user": {}})
+        assert request.headers["Authorization"] == "Bearer private-token"
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "task-uuid",
+                        "task_id": "demo",
+                        "version": "1",
+                        "name": "Demo",
+                        "task_family": "infilling",
+                    }
+                ],
+            )
+        payload = json.loads(request.content) if path.count("/uploads/") else None
+        if path.endswith("/uploads/start/"):
+            assert payload == {
+                "task": "task-uuid",
+                "items": {"prediction": {"name": "predictions.nc", "size": 10}},
+            }
+            return httpx.Response(
+                200,
+                json={"token": "t1", "part_size": 4, "items": {"prediction": {"parts": 3}}},
+            )
+        if path.endswith("/uploads/sign/"):
+            parts = [item["part"] for item in payload["requests"]]
+            return httpx.Response(
+                200, json={"urls": [f"https://s3.test/part{n}" for n in parts]}
+            )
+        if path.endswith("/uploads/complete/"):
+            assert payload == {
+                "token": "t1",
+                "parts": {
+                    "prediction": [
+                        {"part": n, "etag": f'"/part{n}"'} for n in (1, 2, 3)
+                    ]
+                },
+            }
+            return httpx.Response(200, json={"token": "done"})
+        body = request.read()
+        assert b"direct_upload=done" in body and b"prediction_file" not in body
+        return httpx.Response(201, json={"id": "upload-uuid", "status": "submitted"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    monkeypatch.setattr(cli.httpx, "Client", lambda **kwargs: client)
+    monkeypatch.setattr(
+        cli,
+        "_submission_metadata",
+        lambda user: {"method_name": "Demo", "method_type": "baseline"},
+    )
+    progress = []
+    real_progress = cli.upload_progress
+
+    @contextmanager
+    def recorded_progress(total):
+        with real_progress(total) as advance:
+
+            def record(count):
+                progress.append(count)
+                advance(count)
+
+            yield record
+
+    monkeypatch.setattr(cli, "upload_progress", recorded_progress)
+    result = runner.invoke(
+        cli.submit_app,
+        ["--platform-url", "https://example.org"],
+        input=f"user@example.org\nsecret\n1\n{prediction}\n\ny\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert stored == {"/part1": b"0123", "/part2": b"4567", "/part3": b"89"}
+    assert "upload-uuid" in result.output
+    # Each stored part advances the bar once; the rejected first try of part 2 does not.
+    assert progress == [4, 4, 2]
+    assert "Uploading" in result.output
 
 
 def test_upload_progress_counts_every_uploaded_byte(tmp_path, monkeypatch):
